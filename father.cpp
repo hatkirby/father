@@ -73,6 +73,8 @@ int main(int argc, char** argv)
   std::string configfile(argv[1]);
   YAML::Node config = YAML::LoadFile(configfile);
 
+  verbly::database database(config["verbly_datafile"].as<std::string>());
+
   twitter::auth auth;
   auth.setConsumerKey(config["consumer_key"].as<std::string>());
   auth.setConsumerSecret(config["consumer_secret"].as<std::string>());
@@ -80,8 +82,6 @@ int main(int argc, char** argv)
   auth.setAccessSecret(config["access_secret"].as<std::string>());
 
   std::set<twitter::user_id> streamedFriends;
-
-  verbly::database database(config["verbly_datafile"].as<std::string>());
 
   twitter::client client(auth);
 
@@ -155,8 +155,8 @@ int main(int argc, char** argv)
 
                 if (secondAdjective.isValid())
                 {
-                  name << verbly::token::capitalize(firstAdverb);
-                  name << verbly::token::capitalize(secondAdjective);
+                  name << firstAdverb;
+                  name << secondAdjective;
                 }
               }
             }
@@ -170,7 +170,7 @@ int main(int argc, char** argv)
 
               if (firstAdjective.isValid())
               {
-                name = verbly::token::capitalize(firstAdjective);
+                name = firstAdjective;
               }
             }
 
@@ -179,7 +179,10 @@ int main(int argc, char** argv)
             {
               verbly::token action = {
                 "Hi",
-                verbly::token::punctuation(",", name),
+                verbly::token::punctuation(",",
+                  verbly::token::capitalize(
+                    verbly::token::casing::title_case,
+                    name)),
                 "I'm Dad."};
 
               std::string result =
