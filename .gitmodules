@@ -1,9 +1,6 @@
 [submodule "vendor/libtwittercpp"]
 	path = vendor/libtwittercpp
 	url = git@github.com:hatkirby/libtwittercpp
-[submodule "vendor/yaml-cpp"]
-	path = vendor/yaml-cpp
-	url = git@github.com:jbeder/yaml-cpp
 [submodule "vendor/verbly"]
 	path = vendor/verbly
 	url = git@github.com:hatkirby/verbly
