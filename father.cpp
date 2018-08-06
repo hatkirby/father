@@ -80,22 +80,28 @@ int main(int argc, char** argv)
           std::end(followers),
           std::back_inserter(oldFriends));
 
-        std::list<twitter::user_id> newFollowers;
+        std::set<twitter::user_id> newFollowers;
         std::set_difference(
           std::begin(followers),
           std::end(followers),
           std::begin(friends),
           std::end(friends),
-          std::back_inserter(newFollowers));
+          std::inserter(newFollowers, std::begin(newFollowers)));
 
         for (twitter::user_id f : oldFriends)
         {
           client.unfollow(f);
         }
 
-        for (twitter::user_id f : newFollowers)
+        std::list<twitter::user> newFollowerObjs =
+          client.hydrateUsers(std::move(newFollowers));
+
+        for (twitter::user f : newFollowerObjs)
         {
-          client.follow(f);
+          if (!f.isProtected())
+          {
+            client.follow(f);
+          }
         }
       } catch (const twitter::twitter_error& error)
       {
