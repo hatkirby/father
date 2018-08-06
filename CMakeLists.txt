@@ -10,7 +10,8 @@ add_subdirectory(vendor/verbly)
 include_directories(
   vendor/libtwittercpp/src
   vendor/verbly/lib
-  ${yaml-cpp_INCLUDE_DIRS})
+  ${yaml-cpp_INCLUDE_DIRS}
+  vendor/hkutil)
 
 add_executable(father father.cpp)
 set_property(TARGET father PROPERTY CXX_STANDARD 11)

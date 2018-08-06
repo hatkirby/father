@@ -4,3 +4,6 @@
 [submodule "vendor/verbly"]
 	path = vendor/verbly
 	url = git@github.com:hatkirby/verbly
+[submodule "vendor/hkutil"]
+	path = vendor/hkutil
+	url = git@github.com:hatkirby/hkutil
