@@ -1,4 +1,4 @@
-#include <twitter.h>
+#include <mastodonpp/mastodonpp.hpp>
 #include <random>
 #include <yaml-cpp/yaml.h>
 #include <iostream>
@@ -11,6 +11,8 @@
 #include <iterator>
 #include <verbly.h>
 #include <hkutil/string.h>
+#include <json.hpp>
+#include "timeline.h"
 
 // Sync followers every 4 hours.
 const int CHECK_FOLLOWERS_EVERY = 4 * 60 / 5;
@@ -32,6 +34,46 @@ verbly::word findWordOfType(
   }
 }
 
+std::set<std::string> getPaginatedList(
+  mastodonpp::Connection& connection,
+  mastodonpp::API::endpoint_type endpoint,
+  std::string account_id)
+{
+  std::set<std::string> result;
+
+  mastodonpp::parametermap parameters;
+  for (;;)
+  {
+    parameters["id"] = account_id;
+
+    auto answer = connection.get(endpoint, parameters);
+    if (!answer)
+    {
+      if (answer.curl_error_code == 0)
+      {
+        std::cout << "HTTP status: " << answer.http_status << std::endl;
+      }
+      else
+      {
+        std::cout << "libcurl error " << std::to_string(answer.curl_error_code)
+             << ": " << answer.error_message << std::endl;
+      }
+      return {};
+    }
+
+    parameters = answer.next();
+    if (parameters.empty()) break;
+
+    nlohmann::json body = nlohmann::json::parse(answer.body);
+    for (const auto& item : body)
+    {
+      result.insert(item["id"].get<std::string>());
+    }
+  }
+
+  return result;
+}
+
 int main(int argc, char** argv)
 {
   std::random_device randomDevice;
@@ -48,17 +90,38 @@ int main(int argc, char** argv)
 
   verbly::database database(config["verbly_datafile"].as<std::string>());
 
-  twitter::auth auth(
-    config["consumer_key"].as<std::string>(),
-    config["consumer_secret"].as<std::string>(),
-    config["access_key"].as<std::string>(),
-    config["access_secret"].as<std::string>());
+  mastodonpp::Instance instance{
+    config["mastodon_instance"].as<std::string>(),
+    config["mastodon_token"].as<std::string>()};
+  mastodonpp::Connection connection{instance};
+
+  nlohmann::json account_details;
+  {
+    const mastodonpp::parametermap parameters {};
+    auto answer = connection.get(mastodonpp::API::v1::accounts_verify_credentials, parameters);
+    if (!answer)
+    {
+      if (answer.curl_error_code == 0)
+      {
+        std::cout << "HTTP status: " << answer.http_status << std::endl;
+      }
+      else
+      {
+        std::cout << "libcurl error " << std::to_string(answer.curl_error_code)
+             << ": " << answer.error_message << std::endl;
+      }
+      return 1;
+    }
+    std::cout << answer.body << std::endl;
+    account_details = nlohmann::json::parse(answer.body);
+  }
+
+  timeline home_timeline(mastodonpp::API::v1::timelines_home);
+  home_timeline.poll(connection); // just ignore the results
 
   auto startedTime = std::chrono::system_clock::now();
 
-  twitter::client client(auth);
-
-  std::set<twitter::user_id> friends;
+  std::set<std::string> friends;
   int followerTimeout = 0;
 
   for (;;)
@@ -68,11 +131,17 @@ int main(int argc, char** argv)
       // Sync friends with followers.
       try
       {
-        friends = client.getFriends();
+        friends = getPaginatedList(
+          connection,
+          mastodonpp::API::v1::accounts_id_following,
+          account_details["id"].get<std::string>());
 
-        std::set<twitter::user_id> followers = client.getFollowers();
+        std::set<std::string> followers = getPaginatedList(
+          connection,
+          mastodonpp::API::v1::accounts_id_followers,
+          account_details["id"].get<std::string>());
 
-        std::list<twitter::user_id> oldFriends;
+        std::list<std::string> oldFriends;
         std::set_difference(
           std::begin(friends),
           std::end(friends),
@@ -80,7 +149,7 @@ int main(int argc, char** argv)
           std::end(followers),
           std::back_inserter(oldFriends));
 
-        std::set<twitter::user_id> newFollowers;
+        std::set<std::string> newFollowers;
         std::set_difference(
           std::begin(followers),
           std::end(followers),
@@ -88,24 +157,44 @@ int main(int argc, char** argv)
           std::end(friends),
           std::inserter(newFollowers, std::begin(newFollowers)));
 
-        for (twitter::user_id f : oldFriends)
+        for (const std::string& f : oldFriends)
         {
-          client.unfollow(f);
-        }
-
-        std::list<twitter::user> newFollowerObjs =
-          client.hydrateUsers(std::move(newFollowers));
-
-        for (twitter::user f : newFollowerObjs)
-        {
-          if (!f.isProtected())
+          const mastodonpp::parametermap parameters {{"id", f}};
+          auto answer = connection.post(mastodonpp::API::v1::accounts_id_unfollow, parameters);
+          if (!answer)
           {
-            client.follow(f);
+            if (answer.curl_error_code == 0)
+            {
+              std::cout << "HTTP status: " << answer.http_status << std::endl;
+            }
+            else
+            {
+              std::cout << "libcurl error " << std::to_string(answer.curl_error_code)
+                   << ": " << answer.error_message << std::endl;
+            }
           }
         }
-      } catch (const twitter::twitter_error& error)
+
+        for (const std::string& f : newFollowers)
+        {
+          const mastodonpp::parametermap parameters {{"id", f}, {"reblogs", "false"}};
+          auto answer = connection.post(mastodonpp::API::v1::accounts_id_follow, parameters);
+          if (!answer)
+          {
+            if (answer.curl_error_code == 0)
+            {
+              std::cout << "HTTP status: " << answer.http_status << std::endl;
+            }
+            else
+            {
+              std::cout << "libcurl error " << std::to_string(answer.curl_error_code)
+                   << ": " << answer.error_message << std::endl;
+            }
+          }
+        }
+      } catch (const std::exception& error)
       {
-        std::cout << "Twitter error while syncing followers: " << error.what()
+        std::cout << "Error while syncing followers: " << error.what()
           << std::endl;
       }
 
@@ -117,25 +206,32 @@ int main(int argc, char** argv)
     try
     {
       // Poll the timeline.
-      std::list<twitter::tweet> tweets = client.getHomeTimeline().poll();
+      std::list<nlohmann::json> posts = home_timeline.poll(connection);
 
-      for (twitter::tweet& tweet : tweets)
+      for (const nlohmann::json& post : posts)
       {
-        auto createdTime =
-          std::chrono::system_clock::from_time_t(tweet.getCreatedAt());
-
         if (
           // Only monitor people you are following
-          friends.count(tweet.getAuthor().getID())
-          // Ignore tweets from before the bot started up
-          && createdTime > startedTime
+          friends.count(post["account"]["id"].get<std::string>())
           // Ignore retweets
-          && !tweet.isRetweet()
-          // Ignore messages
-          && tweet.getText().front() != '@')
+          && post["reblog"].is_null())
         {
+          std::string post_content = post["content"].get<std::string>();
+          std::string::size_type pos;
+          while ((pos = post_content.find("<")) != std::string::npos)
+          {
+            std::string prefix = post_content.substr(0, pos);
+            std::string rest = post_content.substr(pos);
+            std::string::size_type right_pos = rest.find(">");
+            if (right_pos == std::string::npos) {
+              post_content = prefix;
+            } else {
+              post_content = prefix + rest.substr(right_pos);
+            }
+          }
+
           std::vector<std::string> tokens =
-            hatkirby::split<std::vector<std::string>>(tweet.getText(), " ");
+            hatkirby::split<std::vector<std::string>>(post_content, " ");
 
           std::vector<std::string> canonical;
           for (std::string token : tokens)
@@ -212,21 +308,23 @@ int main(int argc, char** argv)
                       name)),
                   "I'm Dad."};
 
-                std::string result =
-                  tweet.generateReplyPrefill(client.getUser())
-                  + action.compile();
+                std::string result = "@" + post["account"]["acct"].get<std::string>() + " " + action.compile();
 
-                std::cout << result << std::endl;
+                mastodonpp::parametermap parameters{
+                  {"status", result},
+                  {"in_reply_to_id", post["id"].get<std::string>()}};
 
-                if (result.length() <= 140)
+                auto answer{connection.post(mastodonpp::API::v1::statuses, parameters)};
+                if (!answer)
                 {
-                  try
+                  if (answer.curl_error_code == 0)
                   {
-                    client.replyToTweet(result, tweet);
-                  } catch (const twitter::twitter_error& e)
+                    std::cout << "HTTP status: " << answer.http_status << std::endl;
+                  }
+                  else
                   {
-                    std::cout << "Twitter error while tweeting: " << e.what()
-                      << std::endl;
+                    std::cout << "libcurl error " << std::to_string(answer.curl_error_code)
+                         << ": " << answer.error_message << std::endl;
                   }
                 }
               }
@@ -234,7 +332,7 @@ int main(int argc, char** argv)
           }
         }
       }
-    } catch (const twitter::rate_limit_exceeded&)
+    } catch (const std::exception&)
     {
       // Wait out the rate limit (10 minutes here and 5 below = 15).
       std::this_thread::sleep_for(std::chrono::minutes(10));
